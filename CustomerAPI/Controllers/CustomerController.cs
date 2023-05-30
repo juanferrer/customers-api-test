@@ -6,6 +6,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using CustomerAPI.Models;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace CustomerAPI.Controllers
 {
@@ -24,40 +26,70 @@ namespace CustomerAPI.Controllers
         [HttpGet]
         public async Task<ActionResult<IEnumerable<Customer>>> GetAllCustomers()
         {
-          if (_context.Customer == null)
-          {
-              return NotFound();
-          }
-            return await _context.Customer.Include(c => c.Addresses).ToListAsync();
+            if (_context.Customers == null || _context.Addresses == null)
+            {
+                return NotFound();
+            }
+
+            var dbCustomers = await _context.Customers.ToListAsync();
+            var customers = new List<Customer>();
+
+            foreach (var dbCustomer in dbCustomers)
+            {
+                var addresses = await GetAddressesForCustomer(dbCustomer);
+                var newCustomer = (Customer)dbCustomer;
+                newCustomer.Addresses = addresses;
+                customers.Add(newCustomer);
+            }
+
+            return customers;
         }
 
         // GET: api/customer/active
         [HttpGet("active")]
-        public async Task<ActionResult<IEnumerable<Customer>>> GetActiveCustomer()
+        public async Task<ActionResult<IEnumerable<Customer>>> GetActiveCustomers()
         {
-            if (_context.Customer == null)
+            if (_context.Customers == null || _context.Addresses == null)
             {
                 return NotFound();
             }
-            return await _context.Customer.Include(c => c.Addresses).Where(c => c.Active).ToListAsync();
+
+            var dbCustomers = await _context.Customers.Where(c => c.Active).ToListAsync();
+            var customers = new List<Customer>();
+
+            foreach (var dbCustomer in dbCustomers)
+            {
+                var addresses = await GetAddressesForCustomer(dbCustomer);
+                var newCustomer = (Customer)dbCustomer;
+                newCustomer.Addresses = addresses;
+                customers.Add(newCustomer);
+            }
+
+            return customers;
         }
 
         // GET: api/customer/{id}
         [HttpGet("{id}")]
         public async Task<ActionResult<Customer>> GetCustomer(Guid id)
         {
-          if (_context.Customer == null)
-          {
-              return NotFound();
-          }
-            var customer = await _context.Customer.Include(c => c.Addresses).FirstOrDefaultAsync(c => c.Id == id);
-
-            if (customer == null)
+            if (_context.Customers == null || _context.Addresses == null)
             {
                 return NotFound();
             }
 
-            return customer;
+            var dbCustomer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id);
+
+
+            if (dbCustomer == null)
+            {
+                return NotFound();
+            }
+
+            var addresses = await GetAddressesForCustomer(dbCustomer);
+            var newCustomer = (Customer)dbCustomer;
+            newCustomer.Addresses = addresses;
+
+            return newCustomer;
         }
 
         // PUT: api/customer/{id}
@@ -65,12 +97,38 @@ namespace CustomerAPI.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> PutCustomer(Guid id, Customer customer)
         {
-            if (id != customer.Id)
+            if (id != customer.Id || customer == null)
             {
                 return BadRequest();
             }
 
-            _context.Entry(customer).State = EntityState.Modified;
+            if (_context.Customers == null)
+            {
+                return Problem("Entity set 'CustomerContext.Customers' is null.");
+            }
+
+            if (_context.Addresses == null)
+            {
+                return Problem("Entity set 'CustomerContext.Addresses' is null.");
+            }
+
+
+            // Need to put addresses in a different table
+            var addresses = customer.Addresses;
+            var dbCustomer = (DbCustomer)customer;
+            dbCustomer.MainAddress = addresses[0].Id;
+            _context.Entry(dbCustomer).State = EntityState.Modified;
+
+            _context.Customers.Update(dbCustomer);
+
+            var dbAddresses = new List<DbAddress>();
+            foreach (var address in addresses)
+            {
+                var dbAddress = (DbAddress)address;
+                dbAddress.Customer = customer.Id;
+                dbAddresses.Add(dbAddress);
+            }
+            _context.Addresses.UpdateRange(dbAddresses);
 
             try
             {
@@ -96,11 +154,36 @@ namespace CustomerAPI.Controllers
         [HttpPost]
         public async Task<ActionResult<Customer>> PostCustomer(Customer customer)
         {
-          if (_context.Customer == null)
-          {
-              return Problem("Entity set 'CustomerContext.Customer'  is null.");
-          }
-            _context.Customer.Add(customer);
+            if (customer == null)
+            {
+                return BadRequest();
+            }
+
+            if (_context.Customers == null)
+            {
+                return Problem("Entity set 'CustomerContext.Customers' is null.");
+            }
+
+            if (_context.Addresses == null)
+            {
+                return Problem("Entity set 'CustomerContext.Addresses' is null.");
+            }
+
+            // Need to put addresses in a different table
+            var addresses = customer.Addresses;
+            var dbCustomer = (DbCustomer)customer;
+
+            await _context.Customers.AddAsync(dbCustomer);
+
+            var dbAddresses = new List<DbAddress>();
+            foreach (var address in addresses)
+            {
+                var dbAddress = (DbAddress)address;
+                dbAddress.Customer = customer.Id;
+                dbAddresses.Add(dbAddress);
+            }
+            await _context.Addresses.AddRangeAsync(dbAddresses);
+
             await _context.SaveChangesAsync();
 
             return CreatedAtAction("GetCustomer", new { id = customer.Id }, customer);
@@ -110,17 +193,21 @@ namespace CustomerAPI.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteCustomer(Guid id)
         {
-            if (_context.Customer == null)
+            if (_context.Customers == null || _context.Addresses == null)
             {
                 return NotFound();
             }
-            var customer = await _context.Customer.FindAsync(id);
+
+            var customer = await _context.Customers.FindAsync(id);
             if (customer == null)
             {
                 return NotFound();
             }
 
-            _context.Customer.Remove(customer);
+            var dbAddresses = await _context.Addresses.Where(a => a.Customer == id).ToListAsync();
+            _context.Addresses.RemoveRange(dbAddresses);
+
+            _context.Customers.Remove(customer);
             await _context.SaveChangesAsync();
 
             return NoContent();
@@ -128,7 +215,22 @@ namespace CustomerAPI.Controllers
 
         private bool CustomerExists(Guid id)
         {
-            return (_context.Customer?.Any(e => e.Id == id)).GetValueOrDefault();
+            return (_context.Customers?.Any(e => e.Id == id)).GetValueOrDefault();
+        }
+
+        private async Task<List<Address>> GetAddressesForCustomer(DbCustomer dbCustomer)
+        {
+            var dbAddresses = await _context.Addresses.Where(a => a.Customer == dbCustomer.Id).ToListAsync();
+            var addresses = new List<Address>();
+            addresses.Add(dbAddresses.Where(a => a.Id == dbCustomer.MainAddress).First());
+            foreach (var dbAddress in dbAddresses)
+            {
+                if (dbAddress.Id != dbCustomer.MainAddress)
+                {
+                    addresses.Add(dbAddress);
+                }
+            }
+            return addresses;
         }
     }
 }
