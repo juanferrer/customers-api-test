@@ -184,9 +184,18 @@ namespace CustomerAPI.Controllers
                     detail: "Customer must have at least one address");
             }
 
+
             // Need to put addresses in a different table
             var addresses = customer.Addresses;
             var dbCustomer = (DbCustomer)customer;
+
+            if (await _context.Customers.FindAsync(customer.Id) != null)
+            {
+                return Problem(
+                    title: "Forbidden",
+                    statusCode: StatusCodes.Status403Forbidden,
+                    detail: "Customer already exists");
+            }
 
             await _context.Customers.AddAsync(dbCustomer);
 
