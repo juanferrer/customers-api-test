@@ -112,6 +112,13 @@ namespace CustomerAPI.Controllers
                 return Problem("Entity set 'CustomerContext.Addresses' is null.");
             }
 
+            if (customer.Addresses == null || customer.Addresses.Count == 0)
+            {
+                return Problem(
+                    title: "Forbidden",
+                    statusCode: StatusCodes.Status403Forbidden,
+                    detail: "Customer must have at least one address");
+            }
 
             // Need to put addresses in a different table
             var addresses = customer.Addresses;
@@ -167,6 +174,14 @@ namespace CustomerAPI.Controllers
             if (_context.Addresses == null)
             {
                 return Problem("Entity set 'CustomerContext.Addresses' is null.");
+            }
+
+            if (customer.Addresses == null || customer.Addresses.Count == 0)
+            {
+                return Problem(
+                    title: "Forbidden",
+                    statusCode: StatusCodes.Status403Forbidden,
+                    detail: "Customer must have at least one address");
             }
 
             // Need to put addresses in a different table
